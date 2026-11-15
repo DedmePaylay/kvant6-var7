@@ -82,22 +82,25 @@ class Reader:
     def take(self, n: int) -> bytes:
         """Вернуть следующие n байтов и сдвинуть курсор. Если байтов не хватает — LoadError."""
         # TODO 1.1  Подсказка: срез  self.data[self.pos : self.pos + n]
-        raise NotImplementedError('Глава 1: Reader.take')
+        if self.pos + n >  len(self.data): raise LoadError('Недостаточно байтов')
+        res = self.data[self.pos: self.pos + n]
+        self.pos += n
+        return res
 
     def u8(self) -> int:
         """1 байт без знака (0…255)."""
         # TODO 1.1
-        raise NotImplementedError('Глава 1: Reader.u8')
+        return self.take(1)[0]
 
     def u16(self) -> int:
         """2 байта без знака, big-endian."""
         # TODO 1.1  Подсказка: int.from_bytes(..., 'big')
-        raise NotImplementedError('Глава 1: Reader.u16')
+        return int.from_bytes(self.take(2), 'big')
 
     def u32(self) -> int:
         """4 байта без знака, big-endian."""
         # TODO 1.1
-        raise NotImplementedError('Глава 1: Reader.u32')
+        return int.from_bytes(self.take(4), 'big')
 
 
 def load(data: bytes) -> Cartridge:
@@ -108,7 +111,33 @@ def load(data: bytes) -> Cartridge:
     """
     # TODO 1.2  Порядок полей: сигнатура, версия, владелец, тип, куча,
     #           глобальные, точка входа, пул строк, код, контрольная сумма.
-    raise NotImplementedError('Глава 1: load')
+    if len(data) < 36: #4 байта KVNT + 32 SHA-256
+        raise LoadError('Файл слишком короткий')
+    body, digest = data[:-32], data[-32:]
+    if data[:4] != b'KVNT': raise LoadError('Неверная сигнатура')
+    if hashlib.sha256(body).digest() != digest: raise LoadError('Контрольная сумма не совпадает')
+    r = Reader(body)
+    r.take(4)
+    version = (r.u8(), r.u8())
+    owner = r.take(r.u8()).decode('utf-8')
+    kind = r.u8()
+    heap = r.u16()
+    nglobals = r.u8()
+    entry = r.u16()
+    consts = [r.take(r.u16()).decode('utf-8') for _ in range(r.u16())]
+    code_len = r.u32()
+    code = r.take(code_len)
+    if len(body) != r.pos: raise  LoadError('Лишние байты в картридже')
+    return Cartridge(
+        owner=owner,
+        kind=kind,
+        heap=heap,
+        nglobals=nglobals,
+        entry=entry,
+        consts=consts,
+        code=code,
+        version=version
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════
