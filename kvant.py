@@ -176,8 +176,24 @@ def decode(code: bytes, pc: int):
     decode(bytes([0x01, 0, 0, 0, 42]), 0)  ->  ('PUSH', [42], 5)
     decode(bytes([0x2B, 0, 8, 1]), 0)      ->  ('CALL', [8, 1], 4)
     """
+    if pc < 0 or pc >= len(code):
+        return None
+
+    if code[pc] not in OPCODES:
+        return None
+    name, form = OPCODES[code[pc]]
+
+    p = pc + 1 #первый байт команды уже содержит её код. Аргументы начинаются со следующего байта.
+    args = []
+    for t in form:
+        size = OPERAND_SIZE[t]
+        if p + size > len(code):
+            return None
+        args.append(int.from_bytes(code[p:p+size], 'big', signed=(t == 'i')))
+        p += size
+    return name, args, p
     # TODO 2.1  Не забудьте: i32 — со знаком (int.from_bytes(..., 'big', signed=True)).
-    raise NotImplementedError('Глава 2: decode')
+
 
 
 def disassemble(cart: Cartridge) -> str:
@@ -192,7 +208,62 @@ def disassemble(cart: Cartridge) -> str:
     Неизвестный байт печатается как  ??      0x40  и разбор идёт дальше со следующего байта.
     """
     # TODO 2.2  Сделайте два прохода: сначала соберите адреса меток, потом печатайте.
-    raise NotImplementedError('Глава 2: disassemble')
+
+    code = cart.code
+    labels = {cart.entry}
+    commands = []
+
+    forms = {name: form for name, form in OPCODES.values()}
+
+    # Первый проход: расшифровка команд и поиск меток
+    pc = 0
+
+    while pc < len(code):
+        decoded = decode(code, pc)
+
+        if decoded is None:
+            commands.append((pc, '??', [], ''))
+            pc += 1
+            continue
+
+        name, args, next_pc = decoded
+        form = forms[name]
+
+        commands.append((pc, name, args, form))
+
+        for t, arg in zip(form, args):
+            if t == 'a':
+                labels.add(arg)
+
+        pc = next_pc
+    # Второй проход: формирование текстового листинга
+    lines = []
+
+    for pc, name, args, form in commands:
+
+        if pc in labels:
+            label = f'L_{pc:04X}:'
+
+            if pc == cart.entry:
+                label += '    ; точка входа'
+
+            lines.append(label)
+
+        if name == '??':
+            operands = f'0x{code[pc]:02X}'
+        else:
+            operands = ', '.join(
+                f'L_{arg:04X}' if t == 'a' else str(arg)
+                for t, arg in zip(form, args)
+            )
+
+        line = f'  {pc:04X}  {name:<8}{operands}'
+
+        if name == 'PRINTS' and args and 0 <= args[0] < len(cart.consts):
+            line += f'    ; {cart.consts[args[0]]!r}'
+
+        lines.append(line.rstrip())
+    return '\n'.join(lines)
 
 
 # ════════════════════════════════════════════════════════════════════════
