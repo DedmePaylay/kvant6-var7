@@ -276,19 +276,32 @@ def wrap32(x: int) -> int:
     wrap32(2**31) -> -2147483648      wrap32(65536 * 65536) -> 0
     """
     # TODO 3.1  Подсказка: x & 0xFFFFFFFF, а потом разберитесь со знаком.
-    raise NotImplementedError('Глава 3: wrap32')
+    x = x & 0xFFFFFFFF
+    if x >= 0x80000000:
+        x -= 0x100000000
+    return x
 
 
 def java_div(a: int, b: int) -> int:
     """Частное, округлённое К НУЛЮ:  java_div(-7, 2) -> -3   (а -7 // 2 в Python = -4!)."""
     # TODO 3.2  b == 0 -> raise VMError('деление на ноль')
-    raise NotImplementedError('Глава 3: java_div')
+    if b == 0:
+        raise VMError('деление на ноль')
+    q = abs(a) // abs(b)
+
+    if (a < 0) != (b < 0):
+        q = -q
+    return wrap32(q)
 
 
 def java_mod(a: int, b: int) -> int:
     """Остаток со знаком делимого:  a - b * java_div(a, b).   java_mod(-7, 2) -> -1."""
     # TODO 3.2
-    raise NotImplementedError('Глава 3: java_mod')
+    if b == 0:
+        raise VMError('деление на ноль')
+
+    return wrap32(a - b * java_div(a, b))
+
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -476,17 +489,28 @@ class VM:
     def push(self, v):
         """Положить значение на стек. Больше STACK_LIMIT — VMError('переполнение стека')."""
         # TODO 3.3
-        raise NotImplementedError('Глава 3: VM.push')
+        if len(self.stack) >= STACK_LIMIT:
+            raise VMError('переполнение стека')
+
+        self.stack.append(v)
 
     def pop(self):
         """Снять значение. Если стек не выше дна текущего кадра — VMError('стек пуст')."""
         # TODO 3.3  Дно — self.frame.base
-        raise NotImplementedError('Глава 3: VM.pop')
+        if len(self.stack) <= self.frame.base:
+            raise VMError('стек пуст')
+
+        return self.stack.pop()
 
     def pop_int(self) -> int:
         """Снять ЧИСЛО. Если там ссылка — VMError('ожидалось число')."""
         # TODO 3.3
-        raise NotImplementedError('Глава 3: VM.pop_int')
+        v = self.pop()
+
+        if not isinstance(v, int):
+            raise VMError('ожидалось число')
+
+        return v
 
     def pop_ref(self) -> HeapObject:
         """Снять ССЫЛКУ на живой объект. Число — 'ожидалась ссылка';
@@ -508,7 +532,36 @@ class VM:
            VMError(f'pc={pc:04X} {мнемоника}: {msg}') — чтобы было видно, где упало.
         """
         # TODO 3.4
-        raise NotImplementedError('Глава 3: VM.step')
+        # Запоминаем адрес текущей команды
+        pc = self.pc
+        # Проверяем, находится ли адрес внутри байт-кода
+        if pc < 0 or pc >= len(self.code):
+            raise VMError(f'pc={pc:04X}: адрес вне кода')
+        # Расшифровываем команду
+        decoded = decode(self.code, pc)
+        if decoded is None:
+            raise VMError(
+                f'pc={pc:04X}: неизвестная команда 0x{self.code[pc]:02X}'
+            )
+        # Получаем название, аргументы и следующий адрес
+        name, args, next_pc = decoded
+        # Находим обработчик команды
+        handler = self.handlers.get(name)
+
+        if handler is None:
+            raise VMError(
+                f'pc={pc:04X}: неизвестная команда 0x{self.code[pc]:02X}'
+            )
+        # Увеличиваем счётчик выполненных инструкций
+        self.steps += 1
+        # Перемещаемся к следующей команде
+        self.pc = next_pc
+        # Выполняем команду
+        try:
+            handler(args)
+
+        except VMError as e:
+            raise VMError(f'pc={pc:04X} {name}: {e}') from None
 
     # ── обработчики команд ──────────────────────────────────────────────
     # Каждый получает список операндов args (может быть пустым).
@@ -532,12 +585,137 @@ class VM:
     #   op_print, op_printc, op_assert                                  (глава 3)
     #   op_call, op_ret, op_new, op_getf, op_setf, op_len, op_meminfo, op_pix (глава 4)
     #
-    # Пример для разгона:
-    #
-    #   def op_add(self, args):
-    #       b = self.pop_int()          # вершина — второй операнд!
-    #       a = self.pop_int()
-    #       self.push(wrap32(a + b))
+
+    # Вспомогательные методы
+
+    def _two_ints(self):
+        b = self.pop_int()
+        a = self.pop_int()
+        return a, b
+
+    def _local_index(self, index):
+        if not 0 <= index < NLOCALS:
+            raise VMError(
+                f'нет локальной переменной L[{index}] (доступны 0..15)'
+            )
+        return index
+
+    def _global_index(self, index):
+        if not 0 <= index < len(self.globals):
+            raise VMError(f'нет глобальной переменной G[{index}]')
+        return index
+
+    # Стек
+
+    def op_pop(self, args):
+        self.pop()
+
+    def op_dup(self, args):
+        value = self.pop()
+        self.push(value)
+        self.push(value)
+
+    def op_swap(self, args):
+        b = self.pop()
+        a = self.pop()
+        self.push(b)
+        self.push(a)
+
+    # Арифметика
+
+    def op_add(self, args):
+        a, b = self._two_ints()
+        self.push(wrap32(a + b))
+
+    def op_sub(self, args):
+        a, b = self._two_ints()
+        self.push(wrap32(a - b))
+
+    def op_mul(self, args):
+        a, b = self._two_ints()
+        self.push(wrap32(a * b))
+
+    def op_div(self, args):
+        a, b = self._two_ints()
+        self.push(java_div(a, b))
+
+    def op_mod(self, args):
+        a, b = self._two_ints()
+        self.push(java_mod(a, b))
+
+    def op_neg(self, args):
+        self.push(wrap32(-self.pop_int()))
+
+    # Сравнения
+
+    def op_eq(self, args):
+        b = self.pop()
+        a = self.pop()
+
+        if isinstance(a, HeapObject) or isinstance(b, HeapObject):
+            self.push(int(a is b))
+        else:
+            self.push(int(a == b))
+
+    def op_lt(self, args):
+        a, b = self._two_ints()
+        self.push(int(a < b))
+
+    def op_gt(self, args):
+        a, b = self._two_ints()
+        self.push(int(a > b))
+
+    def op_not(self, args):
+        self.push(int(self.pop_int() == 0))
+
+    # Переменные
+
+    def op_load(self, args):
+        index = self._local_index(args[0])
+        self.push(self.frame.locals[index])
+
+    def op_store(self, args):
+        index = self._local_index(args[0])
+        self.frame.locals[index] = self.pop()
+
+    def op_gload(self, args):
+        index = self._global_index(args[0])
+        self.push(self.globals[index])
+
+    def op_gstore(self, args):
+        index = self._global_index(args[0])
+        self.globals[index] = self.pop()
+
+    # Переходы
+
+    def op_jmp(self, args):
+        self.pc = args[0]
+
+    def op_jz(self, args):
+        value = self.pop()
+        if type(value) is int and value == 0:
+            self.pc = args[0]
+
+    def op_jnz(self, args):
+        value = self.pop()
+        if not (type(value) is int and value == 0):
+            self.pc = args[0]
+
+    # Вывод и проверки
+
+    def op_print(self, args):
+        self.write(str(self.pop_int()))
+
+    def op_printc(self, args):
+        v = self.pop_int()
+        if not 0 <= v <= 0x10FFFF or 0xD800 <= v <= 0xDFFF:
+            raise VMError('PRINTC: недопустимый код Unicode')
+        self.write(chr(v))
+
+    def op_assert(self, args):
+        if self.pop_int() == 0:
+            raise VMError(f'ASSERT {args[0]}: тест не пройден')
+
 
     # ── ГЛАВА 6: корни ──────────────────────────────────────────────────
     def roots(self):
