@@ -26,7 +26,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-
+from math import gcd
 # Чтобы русские буквы нормально печатались в консоли Windows.
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -318,7 +318,26 @@ def java_mod(a: int, b: int) -> int:
 # Пока команды нет в словаре, машина честно останавливается на ней
 # с ошибкой «неизвестная команда 0x40».
 
-HIDDEN = {}
+
+
+
+def x1(a, b):
+    return min(a, b)
+
+def x2(a, b):
+    return wrap32(gcd(a, b))
+
+
+def x3(a, b):
+    return wrap32(abs(wrap32(a - b)))
+
+
+HIDDEN = {
+    'X1': x1,
+    'X2': x2,
+    'X3': x3
+}
+
 
 
 # ════════════════════════════════════════════════════════════════════════
