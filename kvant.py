@@ -363,7 +363,20 @@ class Heap:
         #           записать в self.log (vm.steps, self.used, 'alloc').
         # TODO 6.3  Перед созданием: если не no_limit и used + (n+1) > capacity —
         #           self.collect(vm); если места всё равно нет — VMError('OUT OF MEMORY').
-        raise NotImplementedError('Глава 4: Heap.alloc')
+        if type(n) is not int or not 1 <= n <= 4096:
+            raise VMError('NEW: недопустимый размер массива')
+
+        obj = HeapObject(n, fill)
+
+        self.objects.append(obj)
+
+        self.used += n + 1
+        self.peak = max(self.peak, self.used)
+        self.allocated += 1
+
+        self.log.append((vm.steps, self.used, 'alloc'))
+
+        return obj
 
     def collect(self, vm):
         """Сборка мусора «пометка и очистка» (mark & sweep). Глава 6."""
@@ -516,7 +529,15 @@ class VM:
         """Снять ССЫЛКУ на живой объект. Число — 'ожидалась ссылка';
         освобождённый объект — 'обращение к освобождённому объекту'."""
         # TODO 4.3
-        raise NotImplementedError('Глава 4: VM.pop_ref')
+        value = self.pop()
+
+        if not isinstance(value, HeapObject):
+            raise VMError('ожидалась ссылка')
+
+        if not value.alive:
+            raise VMError('обращение к освобождённому объекту')
+
+        return value
 
     # ── ГЛАВА 3: главный цикл ───────────────────────────────────────────
     def step(self):
@@ -716,6 +737,86 @@ class VM:
         if self.pop_int() == 0:
             raise VMError(f'ASSERT {args[0]}: тест не пройден')
 
+    def op_call(self, args):
+        address, n = args
+
+        if n > NLOCALS:
+            raise VMError('слишком много аргументов CALL')
+
+        if len(self.frames) >= FRAME_LIMIT:
+            raise VMError('слишком глубокая рекурсия')
+
+        arguments = [self.pop() for _ in range(n)][::-1]
+
+        frame = Frame(ret=self.pc, base=len(self.stack))
+        frame.locals[:n] = arguments
+
+        self.frames.append(frame)
+        self.pc = address
+
+    def op_ret(self, args):
+        if len(self.frames) == 1:
+            raise VMError('RET из главной программы')
+
+        result = self.pop()
+
+        old = self.frames.pop()
+        del self.stack[old.base:]
+
+        self.pc = old.ret
+        self.push(result)
+
+    def op_new(self, args):
+        n = self.pop_int()
+        obj = self.heap.alloc(n, self)
+        self.push(obj)
+
+    def op_getf(self, args):
+        index = self.pop_int()
+        obj = self.pop_ref()
+
+        if not 0 <= index < len(obj.items):
+            raise VMError('индекс вне границ массива')
+
+        self.push(obj.items[index])
+
+    def op_setf(self, args):
+        value = self.pop()
+        index = self.pop_int()
+        obj = self.pop_ref()
+
+        if not 0 <= index < len(obj.items):
+            raise VMError('индекс вне границ массива')
+
+        obj.items[index] = value
+
+    def op_len(self, args):
+        obj = self.pop_ref()
+        self.push(len(obj.items))
+
+    def op_meminfo(self, args):
+        k = args[0]
+
+        info = (
+            self.heap.gc_count,
+            self.heap.used,
+            self.heap.peak,
+            self.heap.capacity
+        )
+
+        if not 0 <= k <= 3:
+            raise VMError('MEMINFO: неизвестный параметр')
+
+        self.push(info[k])
+    def op_pix(self, args):
+        c = self.pop_int()
+        y = self.pop_int()
+        x = self.pop_int()
+
+        if not (0 <= x < 32 and 0 <= y < 32 and 0 <= c <= 7):
+            raise VMError('PIX: координаты вне экрана или неверный цвет')
+
+        self.screen[y][x] = c
 
     # ── ГЛАВА 6: корни ──────────────────────────────────────────────────
     def roots(self):
