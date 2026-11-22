@@ -27,6 +27,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from math import gcd
+
 # Чтобы русские буквы нормально печатались в консоли Windows.
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -385,11 +386,18 @@ class Heap:
         if type(n) is not int or not 1 <= n <= 4096:
             raise VMError('NEW: недопустимый размер массива')
 
-        obj = HeapObject(n, fill)
+        size = n + 1
 
+        if not self.no_limit and self.used + size > self.capacity:
+            self.collect(vm)
+
+            if self.used + size > self.capacity:
+                raise VMError('OUT OF MEMORY')
+
+        obj = HeapObject(n, fill)
         self.objects.append(obj)
 
-        self.used += n + 1
+        self.used += size
         self.peak = max(self.peak, self.used)
         self.allocated += 1
 
@@ -405,7 +413,42 @@ class Heap:
         #           3) очистка: непомеченные -> alive = False, вернуть их слоты,
         #              помеченным снять пометку
         #           4) запись в log (vm.steps, used, 'gc_after')
-        raise NotImplementedError('Глава 6: Heap.collect')
+        self.gc_count += 1
+        self.log.append((vm.steps, self.used, 'gc_before'))
+
+        # Этап 1. Пометка используемых объектов
+        todo = [
+            value for value in vm.roots()
+            if isinstance(value, HeapObject)
+        ]
+
+        while todo:
+            obj = todo.pop()
+
+            if obj.marked:
+                continue
+
+            obj.marked = True
+
+            for value in obj.items:
+                if isinstance(value, HeapObject):
+                    todo.append(value)
+
+        # Этап 2. Очистка неиспользуемых объектов
+        survivors = []
+
+        for obj in self.objects:
+            if obj.marked:
+                obj.marked = False
+                survivors.append(obj)
+            else:
+                obj.alive = False
+                self.used -= len(obj.items) + 1
+                self.freed += 1
+
+        self.objects = survivors
+
+        self.log.append((vm.steps, self.used, 'gc_after'))
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -842,7 +885,12 @@ class VM:
         """Все значения, с которых сборщик начинает обход:
         стек операндов, локальные ВСЕХ кадров, глобальные."""
         # TODO 6.1  Удобно сделать генератором:  yield from self.stack  и т. д.
-        raise NotImplementedError('Глава 6: VM.roots')
+        yield from self.stack
+
+        yield from self.globals
+
+        for frame in self.frames:
+            yield from frame.locals
 
 
 def _short(v):
@@ -881,7 +929,48 @@ def save_png(screen, path, scale=10):
 def plot_heap(log, capacity, path):
     """График занятости кучи (глава 6). По горизонтали — номер команды, по вертикали — used."""
     # TODO 6.4  matplotlib: точки из log, линия ёмкости (axhline), моменты сборок.
-    print('(график кучи ещё не написан — глава 6)')
+    # Данные о занятости памяти
+    import matplotlib.pyplot as plt
+    steps = [entry[0] for entry in log]
+    used = [entry[1] for entry in log]
+
+    # Моменты запуска сборщика мусора
+    gc_steps = [
+        entry[0] for entry in log
+        if entry[2] == 'gc_before'
+    ]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # График занятой памяти
+    ax.plot(steps, used, label='Занято памяти')
+
+    # Линия ёмкости кучи
+    ax.axhline(
+        y=capacity,
+        linestyle='--',
+        label='Ёмкость кучи'
+    )
+
+    # Отметки сборок мусора
+    for i, step in enumerate(gc_steps):
+        ax.axvline(
+            x=step,
+            linestyle=':',
+            alpha=0.3,
+            label='Сборка мусора' if i == 0 else None
+        )
+
+    ax.set_title('Занятость кучи Квант-6')
+    ax.set_xlabel('Количество выполненных команд')
+    ax.set_ylabel('Занято слотов')
+
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
 
 
 BENCH_EXPECTED = 'БЕНЧМАРК: КОЛЛАЦ, N = 5000\nЛУЧШЕЕ n = 3711, ДЛИНА = 237\nСУММА ДЛИН = 387940\n'
